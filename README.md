@@ -249,6 +249,7 @@ slice[1] = []int{
 ```
 因为 引用类型不初始化的话 本身就是nil 所以会panic
 
+
 8. 关于变量的初始化
 
 关于这个地方我也出错过
@@ -407,4 +408,248 @@ func t(b1 ber){
 	b1.get()
 
 }
+```
+
+12. 关于递归，
+递归其实就是在执行函数里的函数，直到所有函数都结束了，然后就结束即可。举个例子
+
+
+```go
+func testVisit(ii int) int {
+	if ii == 0 {
+		return 100
+	}
+	fmt.Println(ii)
+	ii = testVisit(ii - 1)
+
+	return ii+1
+}
+
+```
+它的执行很明显是从外层的初始栈开始往里执行，然后所有栈执行完毕即可，这里我使用了`ii = testVisit(ii -1)` 目的有两个，1 为了让每下一个的ii都少1，2 就是为了获取上一个栈的返回值，然后每次返回都+1 最后的返回值是109 这也证明了每次返回都是从最上层的栈开始往下调用然后到最下面的然后返回。
+
+13. 关于 channel
+
+ chan 的机制是这样的，当一个没有缓存的（有缓存也是一样只是当缓存满了就一样了）chan，显示导入一个数据，这个时候
+ 这个发送chan的goruntine就睡眠了（阻塞）然后直到这个chan被接受（只要被接收就行，不管是不是在同样一个goruntine)然后这个数据就被获取了，然后开始唤醒这个chan的发送者的那个goruntine。如果没有后续的数据那么这个chan就应该被关闭了可以人工关闭(close)也可能被系统收回。
+
+看一个例子 这是一个有缓存的，并且利用缓存来限制 http请求数量的操作
+
+```go
+var st = make(chan struct{},20)// 将访问的数据限制在20
+var sy synv.WaitGroup
+func main(){
+  dd := []string{"htps://...",",,,,,",",,,"}
+  sy.Add(len(dd))
+  for _,v := range dd {
+
+      go read(dd)//
+  }
+
+sy.Wait()
+fmt.Println("执行完毕")
+}
+func read(st){
+  defer sy.Done()
+  st <- struct{}// 因为是有缓存的chan所以可以保证一直有20个gorutine是不阻塞的。
+  // 只要有一个goruntine不是阻塞的就不会造成死锁
+  rea(st)
+  <- st
+}
+func rea(st string){
+  res,err := http.Get(st)
+}
+```
+
+只要有一个goruntine不是阻塞的就不会造成死锁，死锁是程序想退出，但是chan内还有东西，没办法退出，但是又没办法运行，造成了无法结束的窘迫，最终就是各个goruntine都是阻塞然而又不能退出的局面。总之 死锁问题有必要再开一个文件来讨论一下。
+
+14. 关于 type
+
+alias的类型和底层可以转化但是不是隐式是显式。
+
+这里分几个内容
+- 一就是
+
+```go
+type hand func(http....,http.....)
+
+// 例如
+
+httprouter.handle("/",httprouter.handle)
+// 这个时候就是
+httprouter.Handle("/",func(http....,http....))
+// 即可。
+```
+
+这种类型的尤其是在函数的调用的时候  要满足 一个hand类型也是很简单 就是函数满足后面那个样式即可
+
+- type hand string
+
+这种情况也是 函数满足后面的那个 type即可 也就是 是string即可 。
+
+15. 关于引用类型
+
+举个 slice说明一下
+
+```go
+
+func main(){
+  t := make([]int,0,10)
+  t = []int{
+    "12",
+  }
+  fmt.Println(t)
+}
+
+func visit(t []string){
+  t = append(s,"1221")
+}
+```
+猜一下 输出的是什么？
+是 ["12","1221"]吗？
+我本来一直以为是，后来我发现其实不是，我们要先证实一个问题，引用类型并不是指针，它是一个数据结构通常是 一个cap 一个len和一个指针对象。所以它本身也是一个实际的值。当这个地方把t传入visit后，其实是值的复制，然后在visit中，t等于了一个append返回的一个新的slice，那么它就不是指向了原来的那个底层数组了，然后它就和原来的那个t不是同一个底层了，那么它的改变并不会影响之前的那个t。那么什么时候会改变呢，也很简单
+
+```go
+func visit(t []string){
+  t [1] = "112"
+}
+
+```
+
+这就叫做赋值，这并没有去进行值的拷贝或者是指针传递。到这里我么可以说一下了
+
+- 15.2 在go里所有的类型只要是传递数据只有两种模式，1 值的拷贝（包括引用类型它的拷贝只不过是拷贝的它的数据组织）2 指针的拷贝，说白了，指针的拷贝也是值的拷贝，因为它本身也是一种值只不过象征了一种钥匙罢了，所以，除了对数据本身进行直接改变，改变他的数据本身，这种行为可以改变它自己，值的传递的话 统统是有拷贝行为。所以我们以后不能把引用类型看成指针，很不一样。如果是指针的话 那么肯定必须要获取值才能去改变，但是引用类型是go的编译器自动的行为，是不可控的，所以把引用类型的本质搞清楚才行。
+
+
+16. 关于带（bare return）形参及不带形参的返回值和defer的故事
+
+看两个例子：
+
+> 之前的例子说过了，defer只是执行滞后但是参数记住是参数也就是将形参传入实参的过程其实是同步的并没有什么区别。
+
+```go
+//  这个例子中返回值是1
+func tt()(t int){
+	defer func() {
+		t ++
+	}()
+	return
+}
+
+// 这个例子中返回值是0
+func tt1()int{
+	t := 0
+	defer func() {
+		t ++
+	}()
+	return t
+}
+// 0 这个例子证明了 参数顺序执行化。
+func tt1()int{
+	t := 0
+	defer func(t int) {
+		t ++
+	}(t)
+	return t
+}
+```
+
+原因也是很简单，首先如果是没有形参的返回值，都是在return后面直接返回的，然后再执行defer然后再执行 os.exit() 但是有形参的就不一样了，它必须返回它形参定义的参数之歌例子中就是t，那么t在哪最后一个出现呢？就是在defer中，所以它的执行过程就变成了，找寻最后出现的t（这里出现在defer中）然后直接执行os.exit() 因为它return后面没有东西，所以它和没有形参的return XXX 很不一样。
+17. 关于buffered
+
+我们在go的执行中经常使用的一种技巧就是限制go并发的速度，那么这个时候buffered变量就可以实现了它的实现是这样的 ` make(chan xxx,number)` 在get请求中一般我都会这么使用`make(chan struct{},20)` 我们定义了一个新的类型就是 struct{} 这个类型是代表了空，当然你也可以使用bool 都可以 struct{} 类型使用的时候 用 struct{}{} 即可。这就代表了这个chan中最多可以暂存number个数据，这就是所谓的缓存技术，也叫做 buffered数据
+
+18. 关于 recover和并发（多goruntine）
+
+如果是在go的多协程中的panic一定要在这个协程中recover否则在主协程的recover根本无法获取这个panic
+
+```go
+go func(i int) {
+			defer sy.Done()
+			defer func() { // 如果是在外部获取recover可以说压根获取不了，想想也是知道的因为你并不知道主协程和这个协程到底哪个运行到哪了，所以要在这个协程中搞定这个panic
+				if e := recover();e != nil {
+					fmt.Println(e)
+				}
+			}()
+			start := time.Now()
+			resp, err := http.Get(url[i])
+
+			if err != nil {
+				fmt.Println(err)
+			}
+			n, err := html.Parse(resp.Body)
+			if err != nil {
+				fmt.Println("err",err)
+				return
+			}
+			defer resp.Body.Close()
+			if err != nil {
+				fmt.Println(err)
+			}
+			wor, im := countWordsAndImagesAsync(nums, ch, n)
+			ma.Store(url[i]+"   num", wor)
+			ma.Store(url[i]+"   image", im)
+			end := time.Now()
+			timeS := end.Sub(start)
+			ma.Store(url[i]+"花费的时间是：",timeS.String())
+		}(i)
+```
+19. 关于递归的出栈和进栈
+递归都有一个进出栈的过程，那么我们可以利用这个东西来完成一个小的技巧，例如整理div
+```go
+func a(){
+  visit(start,end)
+}
+func visit(start,end func()){
+start()//在进栈时执行的函数
+  for {
+    visit()
+  }
+  end()// 在出栈时执行的函数。这样一进一出就可以搞定div的排列。<div> 和 </div>
+}
+```
+
+[关于递归的出栈和进栈](./关于递归的出栈和进栈.md)
+
+20. 关于 函数内部的函数
+
+```go
+
+func t(){
+  var d func()int // 使用这种方式一般都是函数内部有递归，如果不实现 声明一下 函数内部的递归函数将无法运行
+
+  d = func()int{
+    //fdffd
+  }
+  d()
+
+  // 或者
+var d = func(){
+
+}
+d()
+
+总之，不能使用
+func()int{
+
+}
+int() 在go语言中这种行为不允许
+
+}
+```
+关于函数内部的类型 倒是很随意
+```go
+
+func t(t1 inter){
+  type t struct{
+    get()
+  }
+  if d,ok := t1.(t);ok {
+    d.get()
+  }
+  t1.post()
+}
+
+// 这种还是很常见的一种函数内部设立 类型的方式。
+
 ```
